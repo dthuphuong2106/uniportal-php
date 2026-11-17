@@ -520,7 +520,7 @@ class GpaAdvisor {
                     cc.semester_recommended, cc.course_type
              FROM Student s
              JOIN Department d ON d.department_id = s.department_id
-             JOIN Curriculum cur ON cur.major_code = d.department_code
+             JOIN Curriculum cur ON cur.major_code COLLATE utf8mb4_unicode_ci = d.department_code
                  AND cur.admission_year = s.admission_year
              JOIN CurriculumCourse cc ON cc.curriculum_id = cur.curriculum_id
              JOIN Course c ON c.course_id = cc.course_id
