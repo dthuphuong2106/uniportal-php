@@ -23,7 +23,7 @@ class PaymentService {
 
     public static function confirmedTotal(PDO $pdo, int $tuitionId): int {
         $q = $pdo->prepare(
-            "SELECT COALESCE(SUM(amount_vnd), 0) FROM Payment
+            "SELECT COALESCE(SUM(amount_vnd), 0) FROM payment
              WHERE tuition_id = :tid AND status = 'Confirmed'"
         );
         $q->execute([':tid' => $tuitionId]);
@@ -32,7 +32,7 @@ class PaymentService {
 
     public static function expireStaleRequests(PDO $pdo, int $tuitionId): void {
         $pdo->prepare(
-            "UPDATE PaymentRequest SET status='Expired'
+            "UPDATE paymentrequest SET status='Expired'
              WHERE tuition_id = :tid AND status = 'Active' AND expires_at < NOW()"
         )->execute([':tid' => $tuitionId]);
     }
@@ -50,7 +50,7 @@ class PaymentService {
         try {
             $q = $pdo->prepare(
                 'SELECT t.*, sem.semester_name, sem.academic_year
-                 FROM Tuition t JOIN Semester sem ON sem.semester_id = t.semester_id
+                 FROM tuition t JOIN semester sem ON sem.semester_id = t.semester_id
                  WHERE t.tuition_id = :tid AND t.student_id = :sid LIMIT 1 FOR UPDATE'
             );
             $q->execute([':tid' => $tuitionId, ':sid' => $studentId]);
@@ -73,7 +73,7 @@ class PaymentService {
 
             if (!$forceNew) {
                 $q = $pdo->prepare(
-                    "SELECT * FROM PaymentRequest
+                    "SELECT * FROM paymentrequest
                      WHERE tuition_id = :tid AND status = 'Active'
                        AND amount_vnd = :amt AND expires_at > NOW()
                      ORDER BY payment_request_id DESC LIMIT 1"
@@ -86,7 +86,7 @@ class PaymentService {
                             $existing['bank_bin'], $existing['account_number'],
                             (int)$existing['amount_vnd'], $existing['reference'], $existing['account_holder']
                         );
-                        $pdo->prepare('UPDATE PaymentRequest SET qr_payload = ? WHERE payment_request_id = ?')
+                        $pdo->prepare('UPDATE paymentrequest SET qr_payload = ? WHERE payment_request_id = ?')
                             ->execute([$existing['qr_payload'], $existing['payment_request_id']]);
                     }
                     if ($ownTx) $pdo->commit();
@@ -96,7 +96,7 @@ class PaymentService {
 
             // Any older request for this invoice stops being payable.
             $pdo->prepare(
-                "UPDATE PaymentRequest SET status='Expired'
+                "UPDATE paymentrequest SET status='Expired'
                  WHERE tuition_id = :tid AND status = 'Active'"
             )->execute([':tid' => $tuitionId]);
 
@@ -112,7 +112,7 @@ class PaymentService {
                 );
                 try {
                     $pdo->prepare(
-                        "INSERT INTO PaymentRequest
+                        "INSERT INTO paymentrequest
                             (tuition_id, student_id, semester_id, amount_vnd, reference, provider,
                              bank_bin, bank_code, account_number, account_holder, qr_payload,
                              status, expires_at, created_by)
@@ -165,7 +165,7 @@ class PaymentService {
     public static function summary(PDO $pdo, int $tuitionId, string $studentId, int $accountId = 0): ?array {
         $q = $pdo->prepare(
             'SELECT t.*, sem.semester_name, sem.academic_year
-             FROM Tuition t JOIN Semester sem ON sem.semester_id = t.semester_id
+             FROM tuition t JOIN semester sem ON sem.semester_id = t.semester_id
              WHERE t.tuition_id = :tid AND t.student_id = :sid LIMIT 1'
         );
         $q->execute([':tid' => $tuitionId, ':sid' => $studentId]);
@@ -181,7 +181,7 @@ class PaymentService {
         $outstanding = max(0, $amount - $confirmed);
 
         $pPending = $pdo->prepare(
-            "SELECT COALESCE(SUM(amount_vnd),0) FROM Payment
+            "SELECT COALESCE(SUM(amount_vnd),0) FROM payment
              WHERE tuition_id = :tid AND status = 'Pending'"
         );
         $pPending->execute([':tid' => $tuitionId]);
@@ -198,16 +198,16 @@ class PaymentService {
 
         $p = $pdo->prepare(
             'SELECT p.*, bt.gateway, bt.reference_code, bt.transaction_date, bt.status AS bank_status
-             FROM Payment p LEFT JOIN BankTransaction bt ON bt.payment_id = p.payment_id
+             FROM payment p LEFT JOIN banktransaction bt ON bt.payment_id = p.payment_id
              WHERE p.tuition_id = :tid ORDER BY p.created_at DESC, p.payment_id DESC'
         );
         $p->execute([':tid' => $tuitionId]);
         $payments = $p->fetchAll();
 
         $v = $pdo->prepare(
-            "SELECT COUNT(*) FROM BankTransaction bt
+            "SELECT COUNT(*) FROM banktransaction bt
              WHERE bt.status = 'Unmatched' AND (
-                bt.payment_request_id IN (SELECT payment_request_id FROM PaymentRequest WHERE tuition_id = :tid)
+                bt.payment_request_id IN (SELECT payment_request_id FROM paymentrequest WHERE tuition_id = :tid)
                 OR bt.content LIKE :sid OR bt.code LIKE :sid2)
             "
         );
@@ -337,7 +337,7 @@ class PaymentService {
         try {
             try {
                 $pdo->prepare(
-                    "INSERT INTO BankTransaction
+                    "INSERT INTO banktransaction
                         (provider, provider_transaction_id, gateway, account_number, sub_account,
                          code, content, description, transfer_type, transfer_amount, accumulated,
                          reference_code, transaction_date, status, is_test, raw_payload)
@@ -358,7 +358,7 @@ class PaymentService {
                     $pdo->rollBack();
                     // Keep the original review/processing status untouched.
                     $pdo->prepare(
-                        "UPDATE BankTransaction SET match_note=COALESCE(match_note,'Webhook trùng – đã bỏ qua')
+                        "UPDATE banktransaction SET match_note=COALESCE(match_note,'Webhook trùng – đã bỏ qua')
                          WHERE provider=:p AND provider_transaction_id=:id"
                     )->execute([':p' => $txn['provider'], ':id' => $txn['provider_transaction_id']]);
                     return ['status' => 200, 'body' => ['success' => true, 'duplicate' => true]];
@@ -369,7 +369,7 @@ class PaymentService {
 
             $reject = function (string $status, string $note, ?int $requestId = null) use ($pdo, $bankTxId, $txn, $isTest): array {
                 $pdo->prepare(
-                    'UPDATE BankTransaction SET status=:st, match_note=:note, payment_request_id=:pr, processed_at=NOW()
+                    'UPDATE banktransaction SET status=:st, match_note=:note, payment_request_id=:pr, processed_at=NOW()
                      WHERE bank_transaction_id=:id'
                 )->execute([':st' => $status, ':note' => self::short($note, 500),
                     ':pr' => $requestId, ':id' => $bankTxId]);
@@ -404,7 +404,7 @@ class PaymentService {
             }
             $requestId = (int)$request['payment_request_id'];
 
-            $q = $pdo->prepare('SELECT * FROM Tuition WHERE tuition_id = :tid LIMIT 1 FOR UPDATE');
+            $q = $pdo->prepare('SELECT * FROM tuition WHERE tuition_id = :tid LIMIT 1 FOR UPDATE');
             $q->execute([':tid' => (int)$request['tuition_id']]);
             $tuition = $q->fetch();
             if (!$tuition) {
@@ -423,7 +423,7 @@ class PaymentService {
 
             $result = self::applyVerifiedPayment($pdo, $tuition, $request, $txn, $outstanding, 0);
             $pdo->prepare(
-                'UPDATE BankTransaction SET status=:st, payment_request_id=:pr, payment_id=:pay,
+                'UPDATE banktransaction SET status=:st, payment_request_id=:pr, payment_id=:pay,
                         match_note=:note, processed_at=NOW() WHERE bank_transaction_id=:id'
             )->execute([
                 ':st' => $result['overpaid'] > 0 ? 'Processed' : 'Processed',
@@ -454,7 +454,7 @@ class PaymentService {
         $confirmedAt = $txn['transaction_date'] ?: date('Y-m-d H:i:s');
 
         $pdo->prepare(
-            "INSERT INTO Payment
+            "INSERT INTO payment
                 (tuition_id, payment_request_id, student_id, amount_vnd, method, provider,
                  provider_transaction_id, reference_no, bank_reference, note, status,
                  reviewed_by, reviewed_at, confirmed_at, is_test, overpaid_vnd, review_status)
@@ -477,9 +477,9 @@ class PaymentService {
         ]);
         $paymentId = (int)$pdo->lastInsertId();
 
-        $pdo->prepare("UPDATE PaymentRequest SET status='Completed' WHERE payment_request_id = :id")
+        $pdo->prepare("UPDATE paymentrequest SET status='Completed' WHERE payment_request_id = :id")
             ->execute([':id' => (int)$request['payment_request_id']]);
-        $pdo->prepare("UPDATE Tuition SET status=:st WHERE tuition_id=:tid AND status<>'Waived'")
+        $pdo->prepare("UPDATE tuition SET status=:st WHERE tuition_id=:tid AND status<>'Waived'")
             ->execute([':st' => $invoice, ':tid' => (int)$tuition['tuition_id']]);
 
         $note = 'Khớp ' . $request['reference'] . ': nhận ' . number_format($amount)
@@ -522,14 +522,14 @@ class PaymentService {
 
         $reference = VietQrService::extractReference($haystack);
         if ($reference !== null) {
-            $q = $pdo->prepare('SELECT * FROM PaymentRequest WHERE reference = :ref LIMIT 1');
+            $q = $pdo->prepare('SELECT * FROM paymentrequest WHERE reference = :ref LIMIT 1');
             $q->execute([':ref' => $reference]);
             $row = $q->fetch();
             if ($row && $payable($row)) return $row;
         }
         $norm = VietQrService::normalize($haystack);
         $q = $pdo->query(
-            "SELECT * FROM PaymentRequest
+            "SELECT * FROM paymentrequest
              WHERE status IN ('Active','Completed','Expired')
              ORDER BY payment_request_id DESC LIMIT 200"
         );
@@ -546,7 +546,7 @@ class PaymentService {
         $pdo = get_db();
         $pdo->beginTransaction();
         try {
-            $q = $pdo->prepare('SELECT * FROM BankTransaction WHERE bank_transaction_id=:id LIMIT 1 FOR UPDATE');
+            $q = $pdo->prepare('SELECT * FROM banktransaction WHERE bank_transaction_id=:id LIMIT 1 FOR UPDATE');
             $q->execute([':id' => $bankTxId]);
             $bank = $q->fetch();
             if (!$bank) throw new RuntimeException('Không tìm thấy giao dịch.');
@@ -557,7 +557,7 @@ class PaymentService {
                 throw new RuntimeException('Số tiền giao dịch không hợp lệ.');
             }
 
-            $q = $pdo->prepare('SELECT * FROM Tuition WHERE tuition_id=:tid LIMIT 1 FOR UPDATE');
+            $q = $pdo->prepare('SELECT * FROM tuition WHERE tuition_id=:tid LIMIT 1 FOR UPDATE');
             $q->execute([':tid' => $tuitionId]);
             $tuition = $q->fetch();
             if (!$tuition) throw new RuntimeException('Không tìm thấy hóa đơn học phí.');
@@ -568,7 +568,7 @@ class PaymentService {
 
             $request = null;
             if (!empty($bank['payment_request_id'])) {
-                $q = $pdo->prepare('SELECT * FROM PaymentRequest WHERE payment_request_id=:id LIMIT 1');
+                $q = $pdo->prepare('SELECT * FROM paymentrequest WHERE payment_request_id=:id LIMIT 1');
                 $q->execute([':id' => (int)$bank['payment_request_id']]);
                 $request = $q->fetch() ?: null;
             }
@@ -593,7 +593,7 @@ class PaymentService {
             $result = self::applyVerifiedPayment($pdo, $tuition, $request, $txn, $outstanding, $adminId);
 
             $pdo->prepare(
-                "UPDATE BankTransaction SET status='Processed', payment_id=:pay, payment_request_id=:pr,
+                "UPDATE banktransaction SET status='Processed', payment_id=:pay, payment_request_id=:pr,
                         reviewed_by=:admin, reviewed_at=NOW(), processed_at=NOW(), match_note=:note
                  WHERE bank_transaction_id=:id"
             )->execute([
@@ -604,7 +604,7 @@ class PaymentService {
             ]);
             // The invoice is settled for this transaction; the original QR request (if any) is complete.
             if (!empty($request['payment_request_id'])) {
-                $pdo->prepare("UPDATE PaymentRequest SET status='Completed' WHERE payment_request_id=:id")
+                $pdo->prepare("UPDATE paymentrequest SET status='Completed' WHERE payment_request_id=:id")
                     ->execute([':id' => (int)$request['payment_request_id']]);
             }
             AcademicAlertService::writeAuditLog($pdo, $adminId, 'PAYMENT_REVIEW_RESOLVED',
@@ -624,7 +624,7 @@ class PaymentService {
     public static function rejectUnmatched(int $bankTxId, int $adminId, string $note): array {
         $pdo = get_db();
         try {
-            $q = $pdo->prepare('SELECT status FROM BankTransaction WHERE bank_transaction_id=:id');
+            $q = $pdo->prepare('SELECT status FROM banktransaction WHERE bank_transaction_id=:id');
             $q->execute([':id' => $bankTxId]);
             $status = $q->fetchColumn();
             if ($status === false) return ['ok' => false, 'message' => 'Không tìm thấy giao dịch.'];
@@ -632,7 +632,7 @@ class PaymentService {
                 return ['ok' => false, 'message' => 'Giao dịch đã được xử lý trước đó.'];
             }
             $pdo->prepare(
-                "UPDATE BankTransaction SET status='Rejected', reviewed_by=:admin,
+                "UPDATE banktransaction SET status='Rejected', reviewed_by=:admin,
                         reviewed_at=NOW(), processed_at=NOW(), match_note=:note
                  WHERE bank_transaction_id=:id"
             )->execute([':admin' => $adminId, ':note' => self::short($note, 500), ':id' => $bankTxId]);
@@ -647,13 +647,13 @@ class PaymentService {
 
     public static function resolveOverpayment(int $paymentId, int $adminId, string $note): array {
         $pdo = get_db();
-        $q = $pdo->prepare('SELECT * FROM Payment WHERE payment_id=:id');
+        $q = $pdo->prepare('SELECT * FROM payment WHERE payment_id=:id');
         $q->execute([':id' => $paymentId]);
         $payment = $q->fetch();
         if (!$payment || (int)$payment['overpaid_vnd'] <= 0) {
             return ['ok' => false, 'message' => 'Không tìm thấy khoản thu vượt cần xử lý.'];
         }
-        $pdo->prepare("UPDATE Payment SET review_status='Resolved' WHERE payment_id=:id")
+        $pdo->prepare("UPDATE payment SET review_status='Resolved' WHERE payment_id=:id")
             ->execute([':id' => $paymentId]);
         AcademicAlertService::writeAuditLog($pdo, $adminId, 'OVERPAYMENT_RESOLVED',
             'Payment', (string)$paymentId, json_encode(['review_status' => $payment['review_status']]),
@@ -681,7 +681,7 @@ class PaymentService {
     }
 
     private static function studentAccountId(PDO $pdo, string $studentId): int {
-        $q = $pdo->prepare("SELECT account_id FROM Account WHERE student_id=:sid AND role='Student' LIMIT 1");
+        $q = $pdo->prepare("SELECT account_id FROM account WHERE student_id=:sid AND role='Student' LIMIT 1");
         $q->execute([':sid' => $studentId]);
         return (int)$q->fetchColumn();
     }
