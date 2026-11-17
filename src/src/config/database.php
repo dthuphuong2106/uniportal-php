@@ -42,6 +42,10 @@ function get_db(): PDO {
             // Keep NOW()/CURDATE() aligned with PHP's timezone so stored
             // timestamps and PHP date() comparisons agree.
             $pdo->exec("SET time_zone = '" . (new DateTimeImmutable())->format('P') . "'");
+            // The app was written for XAMPP/MariaDB, which allows non-aggregated
+            // columns in GROUP BY queries. TiDB/MySQL 8 enable ONLY_FULL_GROUP_BY
+            // by default, so turn it off for this session.
+            $pdo->exec("SET SESSION sql_mode = REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY', '')");
         } catch (PDOException $e) {
             // Show a clean error; never expose $e->getMessage() in production
             error_log('UniPortal DB connection failed: ' . $e->getMessage());
