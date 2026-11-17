@@ -1,0 +1,5 @@
+.git
+.env
+.DS_Store
+database
+htaccess_backup
