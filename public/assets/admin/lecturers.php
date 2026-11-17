@@ -220,9 +220,13 @@ $listSt = $pdo->prepare(
      ORDER BY l.lecturer_id ASC
      LIMIT :lim OFFSET :off"
 );
-$params[':lim'] = $perPage;
-$params[':off'] = $offset;
-$listSt->execute($params);
+// Bind LIMIT/OFFSET as integers (TiDB/MySQL reject them when passed as strings)
+foreach ($params as $k => $v) {
+    $listSt->bindValue($k, $v, PDO::PARAM_STR);
+}
+$listSt->bindValue(':lim', (int)$perPage, PDO::PARAM_INT);
+$listSt->bindValue(':off', (int)$offset,  PDO::PARAM_INT);
+$listSt->execute();
 $lecturers = $listSt->fetchAll();
 
 $depts = $pdo->query('SELECT department_id, department_code, department_name FROM Department ORDER BY department_code')->fetchAll();
